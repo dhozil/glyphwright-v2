@@ -404,6 +404,42 @@ class GlyphwrightV2(gl.Contract):
         })
 
     @gl.public.view
+    def get_all_arenas(self) -> str:
+        """Get all arenas regardless of status."""
+        out = []
+        for aid in self.arenas:
+            a_json = self.arenas[aid]
+            try:
+                arena = json.loads(a_json)
+            except Exception:
+                continue
+            # Attach creator spell data
+            spell_id = arena.get("creator_spell_id", "")
+            sp_json = self.spells.get(spell_id, "")
+            if sp_json:
+                try:
+                    spell_data = json.loads(sp_json)
+                    wins = int(self.spell_wins.get(spell_id, "0"))
+                    spell_data["stars"] = min(wins, MAX_STARS)
+                    arena["creator_spell"] = spell_data
+                except Exception:
+                    arena["creator_spell"] = {}
+            # Attach challenger spell data
+            challenger_spell_id = arena.get("challenger_spell_id", "")
+            if challenger_spell_id:
+                csp_json = self.spells.get(challenger_spell_id, "")
+                if csp_json:
+                    try:
+                        spell_data = json.loads(csp_json)
+                        wins = int(self.spell_wins.get(challenger_spell_id, "0"))
+                        spell_data["stars"] = min(wins, MAX_STARS)
+                        arena["challenger_spell"] = spell_data
+                    except Exception:
+                        arena["challenger_spell"] = {}
+            out.append(arena)
+        return json.dumps(out)
+
+    @gl.public.view
     def get_active_arenas(self) -> str:
         """Get all arenas waiting for a challenger."""
         out = []

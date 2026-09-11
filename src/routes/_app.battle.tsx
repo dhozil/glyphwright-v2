@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useMemo } from "react";
 import {
+  getAllArenas,
   getActiveArenas,
   getPlayerArenas,
   getSpellsByOwner,
@@ -49,6 +50,14 @@ function BattlePage() {
   type FilterTab = "all" | "mine" | "active" | "completed";
   const [filter, setFilter] = useState<FilterTab>("all");
 
+  // Fetch all arenas (all statuses)
+  const allArenasQuery = useQuery({
+    queryKey: ["allArenas"],
+    queryFn: getAllArenas,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: false,
+  });
+
   // Fetch active arenas (waiting)
   const arenasQuery = useQuery({
     queryKey: ["activeArenas"],
@@ -83,6 +92,7 @@ function BattlePage() {
     },
     onSuccess: () => {
       toast.success("Arena created! Waiting for a challenger...");
+      queryClient.invalidateQueries({ queryKey: ["allArenas"] });
       queryClient.invalidateQueries({ queryKey: ["activeArenas"] });
       queryClient.invalidateQueries({ queryKey: ["playerArenas"] });
       setSelectedSpell("");
@@ -100,6 +110,7 @@ function BattlePage() {
     },
     onSuccess: () => {
       toast.success("Battle joined! Judges are evaluating...");
+      queryClient.invalidateQueries({ queryKey: ["allArenas"] });
       queryClient.invalidateQueries({ queryKey: ["activeArenas"] });
       queryClient.invalidateQueries({ queryKey: ["playerArenas"] });
       setJoinSpell("");
@@ -135,37 +146,38 @@ function BattlePage() {
   const walletDisconnected = !acc.address;
   const playerSpells = playerSpellsQuery.data ?? [];
   const activeArenas = arenasQuery.data ?? [];
+  const allArenas = allArenasQuery.data ?? [];
   const playerArenas = playerArenasQuery.data ?? [];
 
-  // Merge and deduplicate arenas: active + player's arenas
-  const allArenas = useMemo(() => {
+  // Merge player arenas with all arenas for "mine" tab
+  const mergedArenas = useMemo(() => {
     const map = new Map<string, Arena>();
-    for (const a of activeArenas) map.set(a.id, a);
+    for (const a of allArenas) map.set(a.id, a);
     for (const a of playerArenas) map.set(a.id, a);
     return Array.from(map.values());
-  }, [activeArenas, playerArenas]);
+  }, [allArenas, playerArenas]);
 
   // Filter based on tab
   const filteredArenas = useMemo(() => {
     switch (filter) {
       case "mine":
-        return allArenas.filter(
+        return mergedArenas.filter(
           (a) => a.creator.toLowerCase() === (acc.address ?? "").toLowerCase()
         );
       case "active":
         return activeArenas;
       case "completed":
-        return allArenas.filter((a) => a.status === "completed");
+        return mergedArenas.filter((a) => a.status === "completed");
       default:
-        return allArenas;
+        return mergedArenas;
     }
-  }, [filter, allArenas, activeArenas, acc.address]);
+  }, [filter, mergedArenas, activeArenas, acc.address]);
 
   const tabs: { id: FilterTab; label: string; count: number }[] = [
-    { id: "all", label: "All Arenas", count: allArenas.length },
-    { id: "mine", label: "My Arenas", count: allArenas.filter((a) => a.creator.toLowerCase() === (acc.address ?? "").toLowerCase()).length },
+    { id: "all", label: "All Arenas", count: mergedArenas.length },
+    { id: "mine", label: "My Arenas", count: mergedArenas.filter((a) => a.creator.toLowerCase() === (acc.address ?? "").toLowerCase()).length },
     { id: "active", label: "Active", count: activeArenas.length },
-    { id: "completed", label: "Completed", count: allArenas.filter((a) => a.status === "completed").length },
+    { id: "completed", label: "Completed", count: mergedArenas.filter((a) => a.status === "completed").length },
   ];
 
   return (

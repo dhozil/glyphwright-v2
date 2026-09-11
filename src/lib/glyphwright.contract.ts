@@ -80,7 +80,7 @@ const CONTRACT_ADDR_KEY = "glyphwright:contract:address";
 
 // Deployed on GenLayer Studionet. Set via VITE_GLYPHWRIGHT_CONTRACT or
 // falls back to this hardcoded address from the last known deployment.
-const FALLBACK_CONTRACT = "0x2FCC25047a0D44A62457E2f13cffb004Ec6035c2";
+const FALLBACK_CONTRACT = "0x74C5fc65b9c553Eb40137f17cE483e4f9c7d16f5";
 
 const ENV_ADDR =
   (typeof import.meta !== "undefined" &&
@@ -705,6 +705,21 @@ export async function joinArena(
   stakeWei: bigint,
 ): Promise<void> {
   await writeAndWait("join_arena", [arenaId, spellId]);
+}
+
+export async function getAllArenas(): Promise<Arena[]> {
+  const client = getReadonlyClient();
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_all_arenas",
+      args: [],
+    }),
+    "[]",
+  );
+  const arr = parseJsonOrNull<unknown[]>(r);
+  if (!Array.isArray(arr)) return [];
+  return arr.map(coerceArena).filter((a): a is Arena => a !== null);
 }
 
 export async function getActiveArenas(): Promise<Arena[]> {
