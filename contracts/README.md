@@ -1,122 +1,109 @@
-# Glyphwright — GenLayer Intelligent Contract
+# Glyphwright — GenLayer Intelligent Contracts
 
-This directory holds the on-chain port of the Glyphwright game logic.
+This directory holds the on-chain game logic.
 
 | File | Purpose |
 |---|---|
-| `glyphwright.py` | The full Intelligent Contract: 5-validator forge council, grimoire (NFT-like), `$GLY` balances + faucet, and marketplace. |
+| `glyphwright.py` | **V1** (legacy) — 5-validator forge council, grimoire, marketplace |
+| `glyphwright_v2.py` | **V2** (current) — forge tiers, battle PvP, star ratings, element wheel, balance system |
 
-It mirrors, 1:1, the TypeScript simulation in:
+---
 
-- `src/lib/glyphwright.functions.ts` — forge + 5-validator council
-- `src/lib/grimoire.ts`              — per-wallet spell storage
-- `src/lib/marketplace.ts`           — listings, buy/sell, `$GLY` balance + faucet
-
-## Public methods
+## V2 Public Methods
 
 ### Reads (free)
-- `balance_of(owner: str) -> int`
-- `get_spell(spell_id: str) -> dict`
-- `get_spells_by_owner(owner: str) -> list[dict]`
-- `get_active_listings() -> list[dict]`
-- `get_listing(listing_id: str) -> dict`
+| Method | Returns |
+|---|---|
+| `get_spell(spell_id)` | Full spell dict (name, incantation, power, element, rarity, stars, owner) |
+| `get_spells_by_owner(owner)` | List of all spells owned by wallet |
+| `get_active_listings()` | All marketplace listings |
+| `get_listing(listing_id)` | Single listing dict |
+| `get_active_arenas()` | All non-settled battle arenas with full spell data |
+| `get_player_arenas(player)` | Arenas where player has a spell (with spell data + stars) |
+| `get_arena(arena_id)` | Single arena dict |
+| `contract_balance()` | Total contract balance in wei |
+| `get_balance(addr)` | Player's on-chain deposit balance in wei |
+| `get_spell_wins(spell_id)` | Number of battle wins for a spell |
+| `get_spell_losses(spell_id)` | Number of battle losses for a spell |
 
 ### Writes (consensus)
-- `forge_spell(intent: str) -> dict` — runs the 5-validator council via
-  `gl.eq_principle.prompt_comparative`; on ≥60% approval, mints the spell
-  into the caller's grimoire. Returns the full receipt
-  `{ spell_id, owner, spellName, incantation, description, votes[], consensus }`,
-  so the frontend never needs a follow-up read after the tx finalizes.
-- `claim_faucet() -> int` — +250 `$GLY` for the caller; returns new balance.
-- `list_spell(spell_id, price) -> str` — returns the new listing id.
-- `delist_spell(listing_id)`
-- `buy_listing(listing_id)` — transfers `$GLY` and spell ownership atomically.
+| Method | Description |
+|---|---|
+| `deposit()` | Deposit GEN into contract balance (payable) |
+| `withdraw(amount)` | Withdraw from on-chain balance to wallet |
+| `forge_spell(intent, tier)` | Forge a spell in chosen tier (standard/epic/legendary). Payable — costs tier fee. Uses `run_nondet_unsafe` for LLM generation. All spells always FORGED. |
+| `create_arena(spell_id, stake)` | Create a PvP battle arena (deducts stake from balance) |
+| `join_arena(arena_id, spell_id)` | Join an existing arena with a spell (deducts stake from balance) |
+| `resolve_battle(arena_id)` | AI-judged battle: 6-criteria score-based winner, 5% fee to owner |
+| `list_spell(spell_id, price)` | List spell for sale in GEN |
+| `delist_spell(listing_id)` | Remove listing |
+| `buy_listing(listing_id)` | Buy spell — atomic ownership transfer + payment |
+| `set_spell_stars(spell_id, stars)` | Rate a spell 1-5 stars |
+| `withdraw_fees()` | Owner-only: withdraw accumulated platform fees |
 
-All errors are raised with `gl.vm.UserError(...)` so they surface cleanly
-through `genlayer-js` as `UserError` rejections rather than generic VM
-exceptions.
+---
+
+## V2 Design Decisions
+
+### All spells always FORGED
+No approval threshold — gacha rarity determines quality via tier-based probability weights:
+- **Standard (1 GEN)**: common 60%, uncommon 30%, rare 10%, PWR 60-75
+- **Epic (2.5 GEN)**: uncommon 40%, rare 40%, epic 20%, PWR 76-89
+- **Legendary (5 GEN)**: rare 30%, epic 40%, legendary 30%, PWR 90-99
+
+### Battle winner = total score
+Six weighted criteria determine the winner (NOT AI verdict alone):
+- Raw Power: 30%
+- Element Advantage: 20% (wheel of 9 elements, each beats next 3)
+- Mana Efficiency: 15%
+- Star Rating: 15%
+- Rarity Bonus: 10%
+- Narrative Quality: 10%
+
+### Balance system
+All battle stakes and marketplace payments use a deposit/withdraw balance model:
+- `deposit()` — payable, adds to player's on-chain balance
+- `withdraw(amount)` — transfers from balance to wallet
+- Arena creation/joining deducts from balance, not `gl.message.value`
+- Marketplace still uses direct `gl.message.value` for simplicity
+
+### Storage
+- JSON dict (no `allow_storage` / `dataclass` — not supported in pinned runner)
+- `TreeMap[str, str]` for spells, listings, arenas, balances, spell_wins, spell_losses
+- `TreeMap[str, bigint]` for numeric maps (requires `int` assignment, not `str`)
+
+### Events
+- `ArenaCreatedEvent(arena_id, creator, stake_wei)`
+- `BattleResolvedEvent(arena_id, winner)`
+- `WithdrawalEvent(addr, amount)`
+- `FeesWithdrawnEvent(addr, amount)`
+
+---
 
 ## Deploy
 
 ```bash
 # Studionet (chainId 61999 / 0xF23F, https://studio.genlayer.com)
 genlayer network studionet
-genlayer deploy --contract contracts/glyphwright.py
+genlayer deploy --contract contracts/glyphwright_v2.py
 ```
 
-Take the returned contract address and expose it to the frontend, e.g.:
+Take the returned contract address and expose it to the frontend:
 
 ```bash
 # .env
-VITE_GLYPHWRIGHT_CONTRACT=0x...
+VITE_GLYPHWRIGHT_CONTRACT=0x2FCC25047a0D44A62457E2f13cffb004Ec6035c2
 ```
 
-## Wiring it from the frontend
+---
 
-Once deployed, replace the localStorage layer with `genlayer-js` calls:
+## Integration Tests
 
-```ts
-import { createClient, createAccount } from "genlayer-js";
-import { studionet } from "genlayer-js/chains";
+Run the full test suite:
 
-const client = createClient({ chain: studionet, account: createAccount() });
-
-// forge
-const tx = await client.writeContract({
-  address: import.meta.env.VITE_GLYPHWRIGHT_CONTRACT,
-  functionName: "forge_spell",
-  args: [intent],
-});
-const receipt = await client.waitForTransactionReceipt({ hash: tx, status: "FINALIZED" });
-
-// read grimoire
-const spells = await client.readContract({
-  address: import.meta.env.VITE_GLYPHWRIGHT_CONTRACT,
-  functionName: "get_spells_by_owner",
-  args: [address],
-});
+```bash
+cd tests/integration
+python -m pytest test_glyphwright_v2.py -v
 ```
 
-Drop-in replacements per file:
-
-| Current (simulation) | Replace with |
-|---|---|
-| `forgeSpell` (server fn) | `writeContract("forge_spell", [intent])` |
-| `saveSpell` | nothing — `forge_spell` mints on approval |
-| `loadGrimoire(addr)` | `readContract("get_spells_by_owner", [addr])` |
-| `loadListings()` | `readContract("get_active_listings")` |
-| `listSpell` / `delistSpell` / `buyListing` | matching contract writes |
-| `getBalance` / `claimFaucet` | `balance_of` / `claim_faucet` |
-
-## Consensus model
-
-Each LLM call inside `forge_spell` is wrapped in
-`gl.eq_principle.prompt_comparative` so the validator network reaches
-agreement on what is otherwise non-deterministic LLM output. `strict_eq`
-is intentionally **not** used for the LLM rounds — different validators
-may run different models, so byte-identical output is not realistic.
-
-Two equivalence principles are used:
-
-1. **Identity** — validators must agree the generated `spellName`,
-   `incantation`, and `description` describe the same magical effect and
-   stay faithful to the player's intent.
-2. **Vote** — for a given persona, validators must agree on the boolean
-   `approve`, `element`, and `rarity`; `power` and `mana_cost` may differ
-   by up to 15 points; `reasoning` must make the same overall point.
-
-The final aggregate (averaged stats, mode-voted element/rarity, approval
-ratio, FORGED/REJECTED verdict) is computed **deterministically in
-contract code after** all nondet rounds settle, so the receipt is fully
-reproducible from the agreed-upon prompt outputs. Storage writes
-(minting, grimoire append, listing changes) only happen *after* every
-equivalence-principle round has reached consensus, in line with
-GenLayer's rule that side effects must live outside non-deterministic
-blocks.
-
-## Timestamps
-
-`forged_at` and `listed_at` are populated from
-`datetime.now(timezone.utc).timestamp()`. GenVM wires the Python clock
-to the transaction's datetime, so all validators observe the same value
-and the timestamp is reproducible from the receipt.
+13 tests covering: BalanceSystem, ForgeStandard, ForgeEpic, ForgeLegendary, ArenaCreateJoin, ViewMethods, OwnerGuards, BattleLifecycle.
