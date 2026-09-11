@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import { useGlyphwrightAccount, shortAddr } from "@/lib/wallet";
 import {
   buyListing,
@@ -13,6 +14,16 @@ import { GrimoireCard } from "@/components/glyph/SpellCard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export const Route = createFileRoute("/_app/market")({
   head: () => ({
@@ -41,6 +52,10 @@ function MarketPage() {
       qc.invalidateQueries({ queryKey: ["listings"] });
       qc.invalidateQueries({ queryKey: ["grimoire"] });
       acc.refreshBalance();
+      toast.success("Spell purchased! Check your Grimoire.");
+    },
+    onError: (error) => {
+      toast.error(`Buy failed: ${error.message}`);
     },
   });
 
@@ -48,6 +63,10 @@ function MarketPage() {
     mutationFn: (l: Listing) => delistSpell(l.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["listings"] });
+      toast.success("Listing removed from Market.");
+    },
+    onError: (error) => {
+      toast.error(`Delist failed: ${error.message}`);
     },
   });
 
@@ -64,13 +83,16 @@ function MarketPage() {
     : delistMut.isPending ? delistMut.variables?.id ?? null
     : null;
 
+  const [buyConfirm, setBuyConfirm] = useState<Listing | null>(null);
+
   const lastError =
     (buyMut.error as Error | null)?.message ??
     (delistMut.error as Error | null)?.message ??
     null;
 
   return (
-    <div className="mx-auto max-w-6xl px-6 pb-20 pt-8">
+    <>
+    <div className="mx-auto max-w-7xl px-6 pb-20 pt-8">
       <header className="flex items-end justify-between mb-8 flex-wrap gap-4">
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-primary/80">Glyph Market</p>
@@ -93,16 +115,16 @@ function MarketPage() {
               {acc.connecting ? "Connecting…" : "Connect Wallet"}
             </Button>
           )}
-          <div className="flex rounded-md border border-border/60 overflow-hidden">
+          <div className="flex rounded-md border border-border overflow-hidden">
             <button
               onClick={() => setFilter("all")}
-              className={`px-3 py-1.5 text-xs ${filter === "all" ? "bg-secondary text-foreground" : "text-muted-foreground"}`}
+              className={`cursor-pointer px-3 py-1.5 text-xs ${filter === "all" ? "bg-secondary text-foreground" : "text-muted-foreground"}`}
             >
               All
             </button>
             <button
               onClick={() => setFilter("mine")}
-              className={`px-3 py-1.5 text-xs ${filter === "mine" ? "bg-secondary text-foreground" : "text-muted-foreground"}`}
+              className={`cursor-pointer px-3 py-1.5 text-xs ${filter === "mine" ? "bg-secondary text-foreground" : "text-muted-foreground"}`}
             >
               My Listings
             </button>
@@ -164,7 +186,7 @@ function MarketPage() {
                         <Button
                           size="sm"
                           disabled={busy || !acc.address}
-                          onClick={() => buyMut.mutate(l)}
+                          onClick={() => setBuyConfirm(l)}
                           className="bg-primary text-primary-foreground hover:bg-primary/90"
                         >
                           {busy ? "Buying…" : "Buy"}
@@ -179,5 +201,33 @@ function MarketPage() {
         </div>
       )}
     </div>
+
+    <AlertDialog open={!!buyConfirm} onOpenChange={(o) => !o && setBuyConfirm(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Buy "{buyConfirm?.spell?.spellName}"?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will transfer {buyConfirm ? formatGen(buyConfirm.price) : "0"} GEN from your wallet.
+            This action cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={buyMut.isPending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              if (buyConfirm) {
+                buyMut.mutate(buyConfirm);
+                setBuyConfirm(null);
+              }
+            }}
+            disabled={buyMut.isPending}
+            className="bg-primary text-primary-foreground"
+          >
+            {buyMut.isPending ? "Buying…" : "Confirm Purchase"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

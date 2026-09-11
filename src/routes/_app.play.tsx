@@ -1,9 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   forgeSpell,
-  approvalFromVotes,
+  forgeSpellTier,
   type ForgeResult,
 } from "@/lib/glyphwright.contract";
 import { useGlyphwrightAccount } from "@/lib/wallet";
@@ -14,6 +15,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Stat, VoteCard } from "@/components/glyph/SpellCard";
 import { ELEMENT_HUE, RARITY_RING, EXAMPLES } from "@/components/glyph/constants";
+import { TierSelector, type ForgeTier } from "@/components/glyph/TierSelector";
 
 export const Route = createFileRoute("/_app/play")({
   head: () => ({
@@ -30,14 +32,32 @@ export const Route = createFileRoute("/_app/play")({
 
 function PlayPage() {
   const [intent, setIntent] = useState("");
+  const [tier, setTier] = useState<ForgeTier>("standard");
   const [lastResult, setLastResult] = useState<ForgeResult | null>(null);
   const acc = useGlyphwrightAccount();
 
   const mut = useMutation({
-    mutationFn: (text: string) => forgeSpell(text),
+    mutationFn: async ({ intent, tier }: { intent: string; tier: ForgeTier }) => {
+      if (tier === "standard") {
+        // Standard now costs 1 GEN
+        return forgeSpellTier(intent, tier, 1000000000000000000n);
+      }
+      // For epic and legendary, we need to send GEN
+      const costs: Record<ForgeTier, bigint> = {
+        standard: 1000000000000000000n, // 1 GEN
+        epic: 2500000000000000000n, // 2.5 GEN
+        legendary: 5000000000000000000n, // 5 GEN
+      };
+      return forgeSpellTier(intent, tier, costs[tier]);
+    },
     onSuccess: (r) => {
       setLastResult(r);
       acc.refreshBalance();
+      if (r.consensus.verdict === "FORGED") {
+        toast.success("Spell forged! Inscribed to your Grimoire.");
+      } else {
+        toast.error("Spell rejected by the Council. Adjust your intent and re-forge.");
+      }
     },
   });
 
@@ -45,7 +65,7 @@ function PlayPage() {
   const walletDisconnected = !acc.address;
 
   return (
-    <div className="mx-auto max-w-4xl px-6 pb-20 pt-8">
+    <div className="mx-auto max-w-7xl px-6 pb-20 pt-8">
       <header className="text-center mb-10">
         <div className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-primary/80 mb-3">
           <span className="h-px w-8 bg-primary/60" />
@@ -81,10 +101,16 @@ function PlayPage() {
       ) : null}
 
       <Card
-        className="p-6 md:p-8 border-primary/20 bg-card/70 backdrop-blur"
+        className="p-6 md:p-8 border-border bg-card/80 backdrop-blur"
         style={{ boxShadow: "var(--glow-rune)" }}
       >
-        <label className="text-sm uppercase tracking-widest text-primary/80">
+        <TierSelector
+          selected={tier}
+          onSelect={setTier}
+          disabled={mut.isPending}
+        />
+
+        <label className="text-sm uppercase tracking-widest text-primary/80 mt-6 block">
           Your incantation of intent
         </label>
         <Textarea
@@ -92,7 +118,7 @@ function PlayPage() {
           onChange={(e) => setIntent(e.target.value)}
           placeholder="Describe what your spell should do..."
           rows={3}
-          className="mt-3 bg-input/60 border-border/60 text-base resize-none"
+          className="mt-3 bg-input/80 border-border text-base resize-none"
           disabled={mut.isPending}
         />
         <div className="mt-3 flex flex-wrap gap-2">
@@ -102,14 +128,14 @@ function PlayPage() {
               type="button"
               onClick={() => setIntent(ex)}
               disabled={mut.isPending}
-              className="text-xs px-2.5 py-1 rounded-full bg-secondary/60 text-secondary-foreground/80 hover:bg-accent/30 hover:text-foreground transition border border-border/40"
+              className="cursor-pointer text-xs px-2.5 py-1 rounded-full bg-secondary/60 text-secondary-foreground/80 hover:bg-accent/30 hover:text-foreground transition border border-border/40"
             >
               {ex}
             </button>
           ))}
         </div>
         <Button
-          onClick={() => mut.mutate(intent)}
+          onClick={() => mut.mutate({ intent, tier })}
           disabled={
             mut.isPending ||
             intent.trim().length < 5 ||
@@ -121,7 +147,7 @@ function PlayPage() {
         >
           {mut.isPending
             ? "Council is deliberating on-chain…"
-            : "Forge the Glyph"}
+            : `Forge the Glyph (${tier === "standard" ? "1 GEN" : tier === "epic" ? "2.5 GEN" : "5 GEN"})`}
         </Button>
         {mut.isPending ? (
           <p className="mt-3 text-xs text-muted-foreground text-center">
@@ -201,10 +227,16 @@ function ContractAddressPrompt({ onSet }: { onSet: (addr: string) => void }) {
 }
 
 function SpellResult({ result }: { result: ForgeResult }) {
-  const { spellName, incantation, description, votes, consensus } = result;
+  const { spellName, incantation, description, votes, consensus, tier } = result;
   const elemHue = ELEMENT_HUE[consensus.element] ?? ELEMENT_HUE.arcane;
   const rarityRing = RARITY_RING[consensus.rarity] ?? RARITY_RING.common;
   const forged = consensus.verdict === "FORGED";
+
+  const tierBadge = {
+    standard: { label: "Standard", className: "bg-zinc-500/20 text-zinc-300 border-zinc-500/50" },
+    epic: { label: "Epic", className: "bg-purple-500/20 text-purple-300 border-purple-500/50" },
+    legendary: { label: "Legendary", className: "bg-amber-500/20 text-amber-300 border-amber-500/50" },
+  }[tier as ForgeTier] ?? { label: "Standard", className: "bg-zinc-500/20 text-zinc-300 border-zinc-500/50" };
 
   return (
     <div className="mt-10 space-y-6 animate-in fade-in duration-700">
@@ -213,9 +245,14 @@ function SpellResult({ result }: { result: ForgeResult }) {
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-primary/80">
-              {consensus.rarity} · {consensus.element}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs uppercase tracking-[0.3em] text-primary/80">
+                {consensus.rarity} · {consensus.element}
+              </p>
+              <Badge variant="outline" className={tierBadge.className}>
+                {tierBadge.label}
+              </Badge>
+            </div>
             <h2 className="mt-2 font-serif text-3xl md:text-4xl font-bold">
               {spellName}
             </h2>
@@ -234,54 +271,36 @@ function SpellResult({ result }: { result: ForgeResult }) {
         </div>
         <p className="mt-4 text-foreground/90 leading-relaxed">{description}</p>
 
-        <div className="mt-6 grid grid-cols-3 gap-4">
+        <div className="mt-6 grid grid-cols-2 gap-4">
           <Stat label="Power" value={consensus.power} accent="text-primary" />
           <Stat
             label="Mana"
             value={consensus.mana_cost}
             accent="text-sky-300"
           />
-          <Stat
-            label="Approval"
-            value={approvalFromVotes(result.votes)}
-            suffix="%"
-            accent={forged ? "text-emerald-400" : "text-destructive"}
-          />
         </div>
 
-        {forged ? (
-          <div className="mt-6 border-t border-border/30 pt-5">
-            <div className="text-sm">
-              <div className="text-emerald-300 font-semibold">
-                ✓ Inscribed to GenLayer
-              </div>
-              <div className="mt-1 font-mono text-xs text-muted-foreground break-all">
-                spell id: {result.spell_id}
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                View it in your{" "}
-                <a href="/grimoire" className="text-primary underline">
-                  Grimoire
-                </a>{" "}
-                or list it on the{" "}
-                <a href="/market" className="text-primary underline">
-                  Market
-                </a>
-                .
-              </p>
+        <div className="mt-6 border-t border-border pt-5">
+          <div className="text-sm">
+            <div className="text-emerald-300 font-semibold">
+              ✓ Inscribed to GenLayer
             </div>
-          </div>
-        ) : (
-          <div className="mt-6 border-t border-border/30 pt-5 text-sm">
-            <div className="text-destructive font-semibold">
-              ✗ Council rejected the spell
+            <div className="mt-1 font-mono text-xs text-muted-foreground break-all">
+              spell id: {result.spell_id}
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Less than 60% of validators approved. Adjust your intent and
-              re-forge.
+            <p className="mt-2 text-xs text-muted-foreground">
+              View it in your{" "}
+              <Link to="/grimoire" className="text-primary underline">
+                Grimoire
+              </Link>{" "}
+              or list it on the{" "}
+              <Link to="/market" className="text-primary underline">
+                Market
+              </Link>
+              .
             </p>
           </div>
-        )}
+        </div>
       </Card>
 
       <div>

@@ -9,7 +9,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "A spell-crafting game where 5 LLM validators vote on every spell you forge. Trade rare glyphs on the GenLayer-powered marketplace.",
+          "Forge AI-judged spell NFTs across three tiers. Battle rival mages in PvP arenas. Trade rare glyphs on the GenLayer-powered marketplace.",
       },
     ],
   }),
@@ -22,17 +22,23 @@ function Landing() {
       className="min-h-screen text-foreground"
       style={{ background: "var(--gradient-arcane), var(--color-background)" }}
     >
-      <header className="mx-auto max-w-6xl px-6 py-6 flex items-center justify-between">
+      <header className="mx-auto max-w-7xl px-6 py-6 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />
           <span className="font-serif tracking-wide text-lg">Glyphwright</span>
         </div>
         <nav className="flex items-center gap-2">
-          <Link to="/market" className="text-sm text-muted-foreground hover:text-foreground px-3 py-2">
-            Market
+          <Link to="/play" className="text-sm text-muted-foreground hover:text-foreground px-3 py-2">
+            Forge
+          </Link>
+          <Link to="/battle" className="text-sm text-muted-foreground hover:text-foreground px-3 py-2">
+            Battle
           </Link>
           <Link to="/grimoire" className="text-sm text-muted-foreground hover:text-foreground px-3 py-2">
             Grimoire
+          </Link>
+          <Link to="/market" className="text-sm text-muted-foreground hover:text-foreground px-3 py-2">
+            Market
           </Link>
           <Button asChild size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90">
             <Link to="/play">Enter the Forge</Link>
@@ -56,8 +62,9 @@ function Landing() {
           </span>
         </h1>
         <p className="mt-8 text-lg text-muted-foreground max-w-2xl mx-auto">
-          Write a spell in plain words. Five arcane LLM validators argue and vote
-          through GenLayer's AI consensus. Forged spells become tradeable NFTs in your grimoire.
+          Write a spell in plain words. Forge it across three tiers — Standard, Epic,
+          or Legendary. Five arcane LLM validators argue and vote through GenLayer's
+          AI consensus. Battle rival mages or trade rare glyphs on the marketplace.
         </p>
         <div className="mt-10 flex flex-wrap justify-center gap-3">
           <Button asChild size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 text-base px-8">
@@ -69,25 +76,25 @@ function Landing() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-6xl px-6 pb-24 grid gap-6 md:grid-cols-3">
+      <section className="mx-auto max-w-7xl px-6 pb-24 grid gap-6 md:grid-cols-3">
         {[
           {
-            t: "Forge",
-            d: "Write any intent. The AI generates a spell name, incantation, and visual lore.",
+            t: "Forge Spells",
+            d: "Write any intent. Choose Standard, Epic, or Legendary tier. The AI generates a spell name, incantation, and visual lore.",
             i: "🔥",
           },
           {
-            t: "Council Votes",
-            d: "5 distinct LLM validators with rival personas score power, mana, element & rarity in parallel.",
-            i: "⚖️",
+            t: "Battle PvP",
+            d: "Stake GEN in arenas. Two mages' spells duel — AI consensus judges the winner. Earn star ratings for your victories.",
+            i: "⚔️",
           },
           {
-            t: "Inscribe & Trade",
-            d: "Approved spells are signed on GenLayer as NFTs. List, buy, and collect rare glyphs.",
+            t: "Trade & Collect",
+            d: "Approved spells are signed on GenLayer as NFTs. List, buy, and collect rare glyphs on the marketplace.",
             i: "💎",
           },
         ].map((c) => (
-          <Card key={c.t} className="p-6 bg-card/60 border-primary/20 backdrop-blur">
+          <Card key={c.t} className="p-6 bg-card/70 border-border backdrop-blur">
             <div className="text-3xl">{c.i}</div>
             <h3 className="mt-3 font-serif text-xl font-bold">{c.t}</h3>
             <p className="mt-2 text-sm text-muted-foreground">{c.d}</p>
@@ -95,13 +102,13 @@ function Landing() {
         ))}
       </section>
 
-      <section className="mx-auto max-w-4xl px-6 pb-24">
-        <Card className="p-8 md:p-12 text-center bg-gradient-to-br from-primary/10 via-accent/10 to-primary/10 border-primary/30">
+      <section className="mx-auto max-w-5xl px-6 pb-24">
+        <Card className="p-8 md:p-12 text-center bg-gradient-to-br from-primary/10 via-accent/10 to-primary/10 border-primary/40">
           <h2 className="font-serif text-3xl md:text-4xl font-bold">
             The Council awaits your incantation.
           </h2>
           <p className="mt-3 text-muted-foreground">
-            Connect your wallet, claim 500 $GLY from the faucet, and forge your first glyph.
+            Connect your wallet, deposit GEN, and forge your first glyph.
           </p>
           <Button asChild size="lg" className="mt-6 bg-primary text-primary-foreground hover:bg-primary/90">
             <Link to="/play">Enter the Forge →</Link>
@@ -110,7 +117,7 @@ function Landing() {
       </section>
 
       <footer className="border-t border-border/40 py-8 text-center text-xs text-muted-foreground">
-        Built on TanStack Start · GenLayer Studionet · Lovable AI Gateway
+        Built on TanStack Start · GenLayer Studionet · V2 — Forge · Battle · Trade
       </footer>
     </div>
   );

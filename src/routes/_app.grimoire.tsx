@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import { useGlyphwrightAccount } from "@/lib/wallet";
 import {
   getActiveListings,
@@ -56,6 +57,10 @@ function GrimoirePage() {
       setSelling(null);
       qc.invalidateQueries({ queryKey: ["listings"] });
       qc.invalidateQueries({ queryKey: ["grimoire"] });
+      toast.success("Spell listed on Market!");
+    },
+    onError: (error) => {
+      toast.error(`Listing failed: ${error.message}`);
     },
   });
 
@@ -83,7 +88,7 @@ function GrimoirePage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-6 pb-20 pt-8">
+    <div className="mx-auto max-w-7xl px-6 pb-20 pt-8">
       <header className="flex items-end justify-between mb-8 flex-wrap gap-4">
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-primary/80">Your Grimoire</p>
@@ -136,7 +141,7 @@ function GrimoirePage() {
         </div>
       )}
 
-      <Dialog open={!!selling} onOpenChange={(o) => !o && setSelling(null)}>
+      <Dialog open={!!selling} onOpenChange={(o) => !o && !listMut.isPending && setSelling(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>List "{selling?.spellName}"</DialogTitle>
@@ -175,7 +180,10 @@ function GrimoirePage() {
               onClick={() => {
                 if (!selling) return;
                 const wei = parseGen(price);
-                if (!wei || wei <= 0n) return;
+                if (!wei || wei <= 0n) {
+                  toast.error("Please enter a valid price greater than 0.");
+                  return;
+                }
                 listMut.mutate({ id: selling.id, wei });
               }}
               disabled={listMut.isPending || !parseGen(price)}

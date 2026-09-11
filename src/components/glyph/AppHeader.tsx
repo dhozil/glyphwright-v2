@@ -16,20 +16,24 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useGlyphwrightAccount, shortAddr } from "@/lib/wallet";
 import { formatGen } from "@/lib/glyphwright.contract";
+import { useState, useEffect } from "react";
 
 const NAV = [
   { to: "/play", label: "Forge" },
   { to: "/grimoire", label: "Grimoire" },
   { to: "/market", label: "Market" },
+  { to: "/battle", label: "Battle" },
 ] as const;
 
 export function AppHeader() {
   const acc = useGlyphwrightAccount();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   return (
     <div className="sticky top-0 z-20 backdrop-blur bg-background/70 border-b border-border/40">
-      <div className="mx-auto max-w-6xl px-6 py-3 flex items-center justify-between gap-3">
+      <div className="mx-auto max-w-7xl px-6 py-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-6">
           <Link to="/" className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />
@@ -56,12 +60,12 @@ export function AppHeader() {
         </div>
 
         <div className="flex items-center gap-2">
-          {acc.walletMode === "burner" ? (
+          {mounted && acc.walletMode === "burner" ? (
             <Badge className="bg-amber-500/20 text-amber-300 border-amber-400/40 hidden sm:inline-flex text-[10px]">
               Burner
             </Badge>
           ) : null}
-          {acc.address ? (
+          {mounted && acc.address ? (
             <>
               <div className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-primary/10 border border-primary/30 text-xs">
                 <span className="text-primary font-semibold">
@@ -156,12 +160,14 @@ export function AppHeader() {
             </Button>
           </div>
           <div className="flex justify-center">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={acc.dismissMetaMaskModal}
-              className="text-xs text-muted-foreground hover:text-foreground transition"
+              className="text-xs text-muted-foreground hover:text-foreground"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </AlertDialogContent>
       </AlertDialog>
@@ -185,7 +191,7 @@ function AccountPopover() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button className="px-3 py-1.5 rounded-md bg-secondary/60 border border-border/50 text-xs font-mono hover:bg-secondary transition">
+        <button className="cursor-pointer px-3 py-1.5 rounded-md bg-secondary/60 border border-border/50 text-xs font-mono hover:bg-secondary transition">
           {shortAddr(acc.address)}
         </button>
       </PopoverTrigger>

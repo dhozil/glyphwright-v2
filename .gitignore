@@ -46,3 +46,13 @@ Thumbs.db
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# GenLayer / Python
+contracts/__pycache__/
+artifacts/
+.pytest_cache/
+*.pyc
+gltest.config.yaml
+
+# Test artifacts
+tests/

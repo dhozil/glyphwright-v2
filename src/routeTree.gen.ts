@@ -14,6 +14,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppPlayRouteImport } from './routes/_app.play'
 import { Route as AppMarketRouteImport } from './routes/_app.market'
 import { Route as AppGrimoireRouteImport } from './routes/_app.grimoire'
+import { Route as AppBattleRouteImport } from './routes/_app.battle'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -39,15 +40,22 @@ const AppGrimoireRoute = AppGrimoireRouteImport.update({
   path: '/grimoire',
   getParentRoute: () => AppRoute,
 } as any)
+const AppBattleRoute = AppBattleRouteImport.update({
+  id: '/battle',
+  path: '/battle',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/battle': typeof AppBattleRoute
   '/grimoire': typeof AppGrimoireRoute
   '/market': typeof AppMarketRoute
   '/play': typeof AppPlayRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/battle': typeof AppBattleRoute
   '/grimoire': typeof AppGrimoireRoute
   '/market': typeof AppMarketRoute
   '/play': typeof AppPlayRoute
@@ -56,19 +64,21 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/_app/battle': typeof AppBattleRoute
   '/_app/grimoire': typeof AppGrimoireRoute
   '/_app/market': typeof AppMarketRoute
   '/_app/play': typeof AppPlayRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/grimoire' | '/market' | '/play'
+  fullPaths: '/' | '/battle' | '/grimoire' | '/market' | '/play'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/grimoire' | '/market' | '/play'
+  to: '/' | '/battle' | '/grimoire' | '/market' | '/play'
   id:
     | '__root__'
     | '/'
     | '/_app'
+    | '/_app/battle'
     | '/_app/grimoire'
     | '/_app/market'
     | '/_app/play'
@@ -116,16 +126,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppGrimoireRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/battle': {
+      id: '/_app/battle'
+      path: '/battle'
+      fullPath: '/battle'
+      preLoaderRoute: typeof AppBattleRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
+  AppBattleRoute: typeof AppBattleRoute
   AppGrimoireRoute: typeof AppGrimoireRoute
   AppMarketRoute: typeof AppMarketRoute
   AppPlayRoute: typeof AppPlayRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppBattleRoute: AppBattleRoute,
   AppGrimoireRoute: AppGrimoireRoute,
   AppMarketRoute: AppMarketRoute,
   AppPlayRoute: AppPlayRoute,

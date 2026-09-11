@@ -20,6 +20,9 @@ import {
   getWalletMode,
   setWalletMode,
   disconnectBurner,
+  getContractBalance,
+  deposit as contractDeposit,
+  withdraw as contractWithdraw,
   type WalletMode,
 } from "./glyphwright.contract";
 
@@ -30,6 +33,7 @@ export { GENLAYER_CHAIN, shortAddr } from "./genlayer-chain";
 type WalletState = {
   address: string | null;
   balance: bigint | null;
+  contractBalance: bigint | null;
   contractAddress: string | null;
   ready: boolean;
   connecting: boolean;
@@ -40,6 +44,9 @@ type WalletState = {
   connectBurner: () => Promise<void>;
   disconnect: () => void;
   refreshBalance: () => Promise<void>;
+  refreshContractBalance: () => Promise<void>;
+  deposit: (value: bigint) => Promise<void>;
+  withdraw: (amount: bigint) => Promise<void>;
   configureContract: (addr: string) => void;
   dismissMetaMaskModal: () => void;
 };
@@ -51,6 +58,7 @@ const WalletContext = createContext<WalletState | null>(null);
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
   const [balance, setBalance] = useState<bigint | null>(null);
+  const [contractBalance, setContractBalance] = useState<bigint | null>(null);
   const [contractAddr, setContractAddrState] = useState<string | null>(
     getContractAddress(),
   );
@@ -108,13 +116,41 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     try {
       setBalance(await balanceOf(address));
     } catch {
-      setBalance(0n);
+      setBalance(null);
     }
   }, [address, contractAddr]);
+
+  const refreshContractBalance = useCallback(async () => {
+    if (!address || !contractAddr) {
+      setContractBalance(null);
+      return;
+    }
+    try {
+      setContractBalance(await getContractBalance(address));
+    } catch {
+      setContractBalance(null);
+    }
+  }, [address, contractAddr]);
+
+  const deposit = useCallback(async (value: bigint) => {
+    await contractDeposit(value);
+    refreshBalance();
+    refreshContractBalance();
+  }, [refreshBalance, refreshContractBalance]);
+
+  const withdraw = useCallback(async (amount: bigint) => {
+    await contractWithdraw(amount);
+    refreshBalance();
+    refreshContractBalance();
+  }, [refreshBalance, refreshContractBalance]);
 
   useEffect(() => {
     refreshBalance();
   }, [refreshBalance]);
+
+  useEffect(() => {
+    refreshContractBalance();
+  }, [refreshContractBalance]);
 
   const connect = useCallback(async () => {
     setError(null);
@@ -160,6 +196,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     disconnectBurner();
     setAddress(null);
     setBalance(null);
+    setContractBalance(null);
     setError(null);
     setWalletModeState("metamask");
   }, []);
@@ -173,6 +210,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     () => ({
       address,
       balance,
+      contractBalance,
       contractAddress: contractAddr,
       ready: !!address && !!contractAddr,
       connecting,
@@ -183,12 +221,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       connectBurner,
       disconnect,
       refreshBalance,
+      refreshContractBalance,
+      deposit,
+      withdraw,
       configureContract,
       dismissMetaMaskModal,
     }),
     [
       address,
       balance,
+      contractBalance,
       contractAddr,
       connecting,
       error,
@@ -198,6 +240,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       connectBurner,
       disconnect,
       refreshBalance,
+      refreshContractBalance,
+      deposit,
+      withdraw,
       configureContract,
       dismissMetaMaskModal,
     ],

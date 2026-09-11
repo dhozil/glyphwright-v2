@@ -25,13 +25,62 @@ import {
 export type { WalletMode } from "./burner";
 export { getWalletMode, setWalletMode } from "./burner";
 
+// ---------- Retry helpers --------------------------------------------------
+
+const READ_RETRY_DELAY_MS = 400;
+const LEADER_RECEIPT_POLL_INTERVAL_MS = 2000;
+const LEADER_RECEIPT_MAX_POLLS = 15;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function readContractWithRetry<T>(
+  fn: () => Promise<T>,
+  fallback: T,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch {
+    await sleep(READ_RETRY_DELAY_MS);
+    try {
+      return await fn();
+    } catch {
+      return fallback;
+    }
+  }
+}
+
+async function waitForLeaderReceipt(
+  client: ReturnType<typeof getClient>,
+  hash: TransactionHash,
+): Promise<GenLayerTransaction> {
+  for (let i = 0; i < LEADER_RECEIPT_MAX_POLLS; i++) {
+    const tx = await client.waitForTransactionReceipt({
+      hash,
+      status: TransactionStatus.ACCEPTED,
+      retries: 1,
+      interval: 1000,
+    });
+    const leaderResult = (tx as GenLayerTransaction)?.consensus_data?.leader_receipt?.[0]?.result;
+    if (leaderResult) return tx as GenLayerTransaction;
+    await sleep(LEADER_RECEIPT_POLL_INTERVAL_MS);
+  }
+  return client.waitForTransactionReceipt({
+    hash,
+    status: TransactionStatus.ACCEPTED,
+    retries: 1,
+    interval: 1000,
+  }) as Promise<GenLayerTransaction>;
+}
+
 // ---------- Contract address ----------------------------------------------
 
 const CONTRACT_ADDR_KEY = "glyphwright:contract:address";
 
 // Deployed on GenLayer Studionet. Set via VITE_GLYPHWRIGHT_CONTRACT or
 // falls back to this hardcoded address from the last known deployment.
-const FALLBACK_CONTRACT = "0xe0d7385b9E15FF4b4EBFf7A15e293F290ecA0e29";
+const FALLBACK_CONTRACT = "0x2FCC25047a0D44A62457E2f13cffb004Ec6035c2";
 
 const ENV_ADDR =
   (typeof import.meta !== "undefined" &&
@@ -54,6 +103,7 @@ export function getContractAddress(): ViemAddress | null {
 
 export function setContractAddress(addr: string): void {
   if (!isBrowser()) return;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return;
   localStorage.setItem(CONTRACT_ADDR_KEY, addr);
 }
 
@@ -137,14 +187,13 @@ function getProvider(): Eth | null {
 }
 
 function buildClient(addr: ViemAddress, provider?: Eth) {
-  if (cachedClient && cachedFor === addr && !connectedOnce) return cachedClient;
+  if (cachedClient && cachedFor === addr && connectedOnce) return cachedClient;
   cachedClient = createClient({
     chain: studionet,
     account: addr,
     ...(provider ? { provider } : {}),
   });
   cachedFor = addr;
-  connectedOnce = false;
   return cachedClient;
 }
 
@@ -204,8 +253,9 @@ async function ensureConnected(addr: ViemAddress): Promise<void> {
     if (!burner) throw new Error("burner account not found");
     const account = createAccount(burner.privKey);
     cachedClient = createClient({ chain: studionet, account });
-    cachedFor = addr;
+    cachedFor = account.address.toLowerCase() as ViemAddress;
     connectedOnce = true;
+    saveStoredAddress(account.address.toLowerCase() as ViemAddress);
     return;
   }
 
@@ -232,7 +282,6 @@ export type Vote = {
   mana_cost: number;
   element: string;
   rarity: string;
-  approve: boolean;
   reasoning: string;
 };
 
@@ -241,14 +290,16 @@ export type Consensus = {
   mana_cost: number;
   element: string;
   rarity: string;
-  approval: number; // 0..100
-  verdict: "FORGED" | "REJECTED";
+  approval: number; // always 100
+  verdict: "FORGED"; // always FORGED
+  tier: string;
 };
 
 export type ForgeResult = {
   spell_id: string;
   owner: string;
   forged_at: number;
+  tier: string;
   intent: string;
   spellName: string;
   incantation: string;
@@ -261,12 +312,16 @@ export type Spell = {
   id: string;
   owner: string;
   forged_at: number;
+  tier: string;
   spellName: string;
   incantation: string;
   description: string;
   intent: string;
   votes: Vote[];
   consensus: Consensus;
+  stars: number;
+  wins: number;
+  losses: number;
 };
 
 export type Listing = {
@@ -279,11 +334,42 @@ export type Listing = {
   spell: Spell;
 };
 
-/** Compute approval percentage from votes. Works even if contract stores stale value. */
-export function approvalFromVotes(votes: Vote[]): number {
-  if (!votes.length) return 0;
-  return Math.round((votes.filter(v => v.approve).length / votes.length) * 100);
-}
+export type Arena = {
+  id: string;
+  creator: string;
+  creator_spell_id: string;
+  creator_spell?: Spell;
+  stake_wei: bigint;
+  status: "waiting" | "active" | "completed" | "expired" | "cancelled";
+  challenger: string;
+  challenger_spell_id: string;
+  challenger_spell?: Spell;
+  winner: string;
+  score_a?: number;
+  score_b?: number;
+  reasoning?: string;
+  element_advantage?: string;
+  created_at: number;
+  resolved_at: number;
+  settled: boolean;
+};
+
+export type ForgeTier = "standard" | "epic" | "legendary";
+
+export type ForgeTierConfig = {
+  name: string;
+  cost_wei: bigint;
+  cost_gen: string;
+  rarity_weights: Record<string, number>;
+};
+
+export type SpellStats = {
+  spell_id: string;
+  wins: number;
+  losses: number;
+  stars: number;
+  win_rate: number;
+};
 
 // ---------- Result coercion -----------------------------------------------
 
@@ -302,6 +388,37 @@ const str = (x: unknown, fallback = ""): string =>
 
 const bool = (x: unknown): boolean => Boolean(x);
 
+/** Extract and double-decode the leader receipt result into a ForgeResult. */
+function decodeLeaderReceipt(tx: GenLayerTransaction): ForgeResult | null {
+  const leaderResult = tx?.consensus_data?.leader_receipt?.[0]?.result;
+
+  let rawJson: string | undefined;
+  if (typeof leaderResult === "string") {
+    rawJson = leaderResult;
+  } else if (leaderResult && typeof leaderResult === "object") {
+    if ("payload" in leaderResult) {
+      const p = (leaderResult as { payload: unknown }).payload;
+      if (typeof p === "string") rawJson = p;
+      else if (p && typeof p === "object" && "readable" in p)
+        rawJson = (p as { readable: string }).readable;
+    } else if ("readable" in leaderResult) {
+      rawJson = (leaderResult as { readable: string }).readable;
+    }
+  }
+
+  if (rawJson) {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(rawJson);
+      if (typeof decoded === "string") decoded = JSON.parse(decoded);
+    } catch {
+      decoded = null;
+    }
+    return coerceForgeResult(isRecord(decoded) ? decoded : null);
+  }
+  return null;
+}
+
 function coerceVote(raw: unknown): Vote {
   const r = isRecord(raw) ? raw : {};
   return {
@@ -310,7 +427,6 @@ function coerceVote(raw: unknown): Vote {
     mana_cost: num(r.mana_cost),
     element: str(r.element),
     rarity: str(r.rarity),
-    approve: bool(r.approve),
     reasoning: str(r.reasoning),
   };
 }
@@ -322,8 +438,9 @@ function coerceConsensus(raw: unknown): Consensus {
     mana_cost: num(r.mana_cost),
     element: str(r.element, "arcane"),
     rarity: str(r.rarity, "common"),
-    approval: num(r.approval),
-    verdict: r.verdict === "FORGED" ? "FORGED" : "REJECTED",
+    approval: num(r.approval, 100),
+    verdict: "FORGED",
+    tier: str(r.tier, "standard"),
   };
 }
 
@@ -334,6 +451,7 @@ function coerceForgeResult(raw: unknown): ForgeResult | null {
     spell_id: str(raw.spell_id),
     owner: str(raw.owner),
     forged_at: num(raw.forged_at),
+    tier: str(raw.tier, "standard"),
     intent: str(raw.intent),
     spellName: str(raw.spellName),
     incantation: str(raw.incantation),
@@ -350,12 +468,16 @@ function coerceSpell(raw: unknown): Spell | null {
     id: str(raw.id),
     owner: str(raw.owner),
     forged_at: num(raw.forged_at),
+    tier: str(raw.tier, "standard"),
     spellName: str(raw.spellName),
     incantation: str(raw.incantation),
     description: str(raw.description),
     intent: str(raw.intent),
     votes,
     consensus: coerceConsensus(raw.consensus),
+    stars: num(raw.stars),
+    wins: num(raw.wins),
+    losses: num(raw.losses),
   };
 }
 
@@ -417,11 +539,14 @@ function parseJsonOrNull<T = unknown>(raw: unknown): T | null {
 
 export async function getSpellsByOwner(addr: string): Promise<Spell[]> {
   const client = getReadonlyClient();
-  const r = await client.readContract({
-    address: requireContractAddress(),
-    functionName: "get_spells_by_owner",
-    args: [addr],
-  });
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_spells_by_owner",
+      args: [addr],
+    }),
+    "[]",
+  );
   const arr = parseJsonOrNull<unknown[]>(r);
   if (!Array.isArray(arr)) return [];
   return arr.map(coerceSpell).filter((s): s is Spell => s !== null);
@@ -429,11 +554,14 @@ export async function getSpellsByOwner(addr: string): Promise<Spell[]> {
 
 export async function getActiveListings(): Promise<Listing[]> {
   const client = getReadonlyClient();
-  const r = await client.readContract({
-    address: requireContractAddress(),
-    functionName: "get_active_listings",
-    args: [],
-  });
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_active_listings",
+      args: [],
+    }),
+    "[]",
+  );
   const arr = parseJsonOrNull<unknown[]>(r);
   if (!Array.isArray(arr)) return [];
   return arr.map(coerceListing).filter((l): l is Listing => l !== null);
@@ -441,11 +569,14 @@ export async function getActiveListings(): Promise<Listing[]> {
 
 export async function getLastForge(addr: string): Promise<ForgeResult | null> {
   const client = getReadonlyClient();
-  const r = await client.readContract({
-    address: requireContractAddress(),
-    functionName: "get_last_forge",
-    args: [addr],
-  });
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_last_forge",
+      args: [addr],
+    }),
+    "",
+  );
   const obj = parseJsonOrNull(r);
   return coerceForgeResult(obj);
 }
@@ -476,7 +607,9 @@ async function writeAndWait(
     retries: 200,
     interval: 2000,
   });
-  return { hash, tx };
+  // Poll for leader receipt — sometimes ACCEPTED arrives before consensus data is populated
+  const fullTx = await waitForLeaderReceipt(client, hash);
+  return { hash, tx: fullTx };
 }
 
 export async function forgeSpell(intent: string): Promise<ForgeResult> {
@@ -486,45 +619,26 @@ export async function forgeSpell(intent: string): Promise<ForgeResult> {
   }
   const { tx } = await writeAndWait("forge_spell", [trimmed]);
 
-  // The contract returns json.dumps(attempt) directly. Read it from the
-  // leader receipt so each forge correlates to its own transaction
-  // rather than polling get_last_forge (which could return a newer
-  // forge if two runs overlap).
-  const leaderResult =
-    tx?.consensus_data?.leader_receipt?.[0]?.result;
+  const result = decodeLeaderReceipt(tx);
+  if (result) return result;
+  throw new Error(
+    "Forge transaction was accepted but the return value is not available yet. Check your Grimoire in a moment.",
+  );
+}
 
-  // decodeLocalnetTransaction transforms the raw base64 into
-  // { status: "return", payload: { readable: "<double-encoded json>" } }
-  // payload.readable is a JSON string containing another JSON string
-  // (the contract's json.dumps return wrapped by GenVM encoding).
-  let rawJson: string | undefined;
-  if (typeof leaderResult === "string") {
-    rawJson = leaderResult;
-  } else if (leaderResult && typeof leaderResult === "object") {
-    if ("payload" in leaderResult) {
-      const p = (leaderResult as { payload: unknown }).payload;
-      if (typeof p === "string") rawJson = p;
-      else if (p && typeof p === "object" && "readable" in p)
-        rawJson = (p as { readable: string }).readable;
-    } else if ("readable" in leaderResult) {
-      rawJson = (leaderResult as { readable: string }).readable;
-    }
+export async function forgeSpellTier(
+  intent: string,
+  tier: string,
+  value: bigint,
+): Promise<ForgeResult> {
+  const trimmed = intent.trim();
+  if (trimmed.length < 5 || trimmed.length > 400) {
+    throw new Error("intent must be 5..400 chars");
   }
+  const { tx } = await writeAndWait("forge_spell_tier", [trimmed, tier], value);
 
-  // Double-decode: payload.readable is a JSON-encoded JSON string
-  if (rawJson) {
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(rawJson);
-      if (typeof decoded === "string") decoded = JSON.parse(decoded);
-    } catch {
-      decoded = null;
-    }
-    const result = coerceForgeResult(
-      isRecord(decoded) ? decoded : null,
-    );
-    if (result) return result;
-  }
+  const result = decodeLeaderReceipt(tx);
+  if (result) return result;
   throw new Error(
     "Forge transaction was accepted but the return value is not available yet. Check your Grimoire in a moment.",
   );
@@ -551,6 +665,237 @@ export async function buyListing(
   await writeAndWait("buy_listing", [listingId], priceWei);
 }
 
+// ---------- V2 Battle Methods -----------------------------------------------
+
+export async function createArena(
+  spellId: string,
+  stakeWei: bigint,
+): Promise<string> {
+  if (stakeWei <= 0n) {
+    throw new Error("stake must be > 0");
+  }
+  const { tx } = await writeAndWait("create_arena", [spellId, stakeWei]);
+  
+  // Extract arena_id from transaction result
+  const leaderResult = tx?.consensus_data?.leader_receipt?.[0]?.result;
+  let arenaId = "";
+  
+  if (typeof leaderResult === "string") {
+    arenaId = leaderResult;
+  } else if (leaderResult && typeof leaderResult === "object") {
+    if ("payload" in leaderResult) {
+      const p = (leaderResult as { payload: unknown }).payload;
+      if (typeof p === "string") arenaId = p;
+      else if (p && typeof p === "object" && "readable" in p)
+        arenaId = (p as { readable: string }).readable;
+    } else if ("readable" in leaderResult) {
+      arenaId = (leaderResult as { readable: string }).readable;
+    }
+  }
+  
+  if (!arenaId) {
+    throw new Error("Arena created but ID not available. Check Battle page.");
+  }
+  return arenaId;
+}
+
+export async function joinArena(
+  arenaId: string,
+  spellId: string,
+  stakeWei: bigint,
+): Promise<void> {
+  await writeAndWait("join_arena", [arenaId, spellId]);
+}
+
+export async function getActiveArenas(): Promise<Arena[]> {
+  const client = getReadonlyClient();
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_active_arenas",
+      args: [],
+    }),
+    "[]",
+  );
+  const arr = parseJsonOrNull<unknown[]>(r);
+  if (!Array.isArray(arr)) return [];
+  return arr.map(coerceArena).filter((a): a is Arena => a !== null);
+}
+
+export async function getArena(arenaId: string): Promise<Arena | null> {
+  const client = getReadonlyClient();
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_arena",
+      args: [arenaId],
+    }),
+    "",
+  );
+  const obj = parseJsonOrNull(r);
+  return coerceArena(obj);
+}
+
+export async function getPlayerArenas(playerAddr: string): Promise<Arena[]> {
+  const client = getReadonlyClient();
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_player_arenas",
+      args: [playerAddr],
+    }),
+    "[]",
+  );
+  const arr = parseJsonOrNull<unknown[]>(r);
+  if (!Array.isArray(arr)) return [];
+  return arr.map(coerceArena).filter((a): a is Arena => a !== null);
+}
+
+export async function getSpellStats(spellId: string): Promise<SpellStats | null> {
+  const client = getReadonlyClient();
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_spell_stats",
+      args: [spellId],
+    }),
+    "",
+  );
+  const obj = parseJsonOrNull(r);
+  if (!isRecord(obj)) return null;
+  return {
+    spell_id: str(obj.spell_id),
+    wins: num(obj.wins),
+    losses: num(obj.losses),
+    stars: num(obj.stars),
+    win_rate: num(obj.win_rate),
+  };
+}
+
+export async function getForgeTiers(): Promise<ForgeTierConfig[]> {
+  const client = getReadonlyClient();
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_forge_tiers",
+      args: [],
+    }),
+    "{}",
+  );
+  const obj = parseJsonOrNull<Record<string, unknown>>(r);
+  if (!isRecord(obj)) return [];
+  
+  return Object.entries(obj).map(([name, config]) => {
+    const c = isRecord(config) ? config : {};
+    return {
+      name,
+      cost_wei: typeof c.cost_wei === "bigint" ? c.cost_wei : BigInt(String(c.cost_wei ?? 0)),
+      cost_gen: String(c.cost_gen ?? "0"),
+      rarity_weights: isRecord(c.rarity_weights) ? c.rarity_weights as Record<string, number> : {},
+    };
+  });
+}
+
+export async function claimExpiredArena(arenaId: string): Promise<void> {
+  await writeAndWait("claim_expired_arena", [arenaId]);
+}
+
+export async function cancelArena(arenaId: string): Promise<void> {
+  await writeAndWait("cancel_arena", [arenaId]);
+}
+
+export async function expireActiveBattle(arenaId: string): Promise<void> {
+  await writeAndWait("expire_active_battle", [arenaId]);
+}
+
+export async function withdrawFees(): Promise<void> {
+  await writeAndWait("withdraw_fees", []);
+}
+
+// ---------- Balance Methods -------------------------------------------------
+
+export async function deposit(value: bigint): Promise<void> {
+  if (value <= 0n) throw new Error("deposit must be > 0");
+  await writeAndWait("deposit", [], value);
+}
+
+export async function withdraw(amount: bigint): Promise<void> {
+  if (amount <= 0n) throw new Error("withdraw amount must be > 0");
+  await writeAndWait("withdraw", [amount]);
+}
+
+export async function getContractBalance(addr: string): Promise<bigint> {
+  const client = getReadonlyClient();
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_balance",
+      args: [addr],
+    }),
+    "",
+  );
+  const obj = parseJsonOrNull(r);
+  if (!isRecord(obj)) return 0n;
+  try {
+    return BigInt(String(obj.balance_wei ?? "0"));
+  } catch {
+    return 0n;
+  }
+}
+
+export async function getAccumulatedFees(): Promise<{ fees_wei: string; fees_gen: number }> {
+  const client = getReadonlyClient();
+  const r = await readContractWithRetry(
+    () => client.readContract({
+      address: requireContractAddress(),
+      functionName: "get_accumulated_fees",
+      args: [],
+    }),
+    "",
+  );
+  const obj = parseJsonOrNull(r);
+  if (!isRecord(obj)) return { fees_wei: "0", fees_gen: 0 };
+  return {
+    fees_wei: str(obj.fees_wei, "0"),
+    fees_gen: num(obj.fees_gen),
+  };
+}
+
+// ---------- V2 Coercion Helpers --------------------------------------------
+
+function coerceArena(raw: unknown): Arena | null {
+  if (!isRecord(raw) || !raw.id) return null;
+  const creatorSpell = isRecord(raw.creator_spell) ? coerceSpell(raw.creator_spell) : undefined;
+  const challengerSpell = isRecord(raw.challenger_spell) ? coerceSpell(raw.challenger_spell) : undefined;
+  
+  let stakeWei: bigint;
+  try {
+    stakeWei = typeof raw.stake_wei === "bigint" ? raw.stake_wei : BigInt(String(raw.stake_wei ?? 0));
+  } catch {
+    stakeWei = 0n;
+  }
+  
+  return {
+    id: str(raw.id),
+    creator: str(raw.creator),
+    creator_spell_id: str(raw.creator_spell_id),
+    creator_spell: creatorSpell ?? undefined,
+    stake_wei: stakeWei,
+    status: raw.status === "active" ? "active" : raw.status === "completed" ? "completed" : raw.status === "expired" ? "expired" : raw.status === "cancelled" ? "cancelled" : "waiting",
+    challenger: str(raw.challenger),
+    challenger_spell_id: str(raw.challenger_spell_id),
+    challenger_spell: challengerSpell ?? undefined,
+    winner: str(raw.winner),
+    score_a: typeof raw.score_a === "number" ? raw.score_a : undefined,
+    score_b: typeof raw.score_b === "number" ? raw.score_b : undefined,
+    reasoning: typeof raw.reasoning === "string" ? raw.reasoning : undefined,
+    element_advantage: typeof raw.element_advantage === "string" ? raw.element_advantage : undefined,
+    created_at: num(raw.created_at),
+    resolved_at: num(raw.resolved_at),
+    settled: Boolean(raw.settled),
+  };
+}
+
 // ---------- Misc ----------------------------------------------------------
 
 export const GENLAYER_EXPLORER = "https://explorer-studio.genlayer.com";
@@ -565,7 +910,20 @@ export function formatGen(wei: bigint, fractionDigits = 4): string {
   const remainder = wei - whole * ONE;
   if (remainder === 0n) return whole.toString();
   // Build a fixed-point fraction string and trim trailing zeros.
-  const fracStr = remainder.toString().padStart(18, "0").slice(0, fractionDigits);
+  const raw = remainder.toString().padStart(18, "0");
+  // Round the last digit for accurate display
+  const roundPos = Math.min(fractionDigits + 1, 18);
+  const roundDigit = Number(raw[roundPos] ?? "0");
+  let fracStr = raw.slice(0, fractionDigits);
+  if (roundDigit >= 5) {
+    // Manual rounding carry
+    const padded = (fracStr + "0".repeat(fractionDigits)).slice(0, fractionDigits);
+    let val = Number(padded) + 1;
+    if (val >= 10 ** fractionDigits) {
+      return `${whole + 1n}`;
+    }
+    fracStr = val.toString().padStart(fractionDigits, "0");
+  }
   const trimmed = fracStr.replace(/0+$/, "");
   return trimmed.length ? `${whole}.${trimmed}` : whole.toString();
 }
