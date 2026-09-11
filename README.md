@@ -115,8 +115,7 @@ echo "VITE_GLYPHWRIGHT_CONTRACT=<your-contract-address>" > .env
 
 ```
 contracts/
-├── glyphwright.py              # V1 (legacy)
-└── glyphwright_v2.py           # V2 — forge tiers, battles, star ratings
+└── glyphwright_v2.py           # Forge tiers, battles, star ratings
 
 src/
 ├── components/glyph/

@@ -4,8 +4,7 @@ This directory holds the on-chain game logic.
 
 | File | Purpose |
 |---|---|
-| `glyphwright.py` | **V1** (legacy) — 5-validator forge council, grimoire, marketplace |
-| `glyphwright_v2.py` | **V2** (current) — forge tiers, battle PvP, star ratings, element wheel, balance system |
+| `glyphwright_v2.py` | Forge tiers, battle PvP, star ratings, element wheel, balance system |
 
 ---
 
@@ -92,7 +91,7 @@ Take the returned contract address and expose it to the frontend:
 
 ```bash
 # .env
-VITE_GLYPHWRIGHT_CONTRACT=0x2FCC25047a0D44A62457E2f13cffb004Ec6035c2
+VITE_GLYPHWRIGHT_CONTRACT=0x74C5fc65b9c553Eb40137f17cE483e4f9c7d16f5
 ```
 
 ---
